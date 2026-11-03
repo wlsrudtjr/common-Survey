@@ -110,6 +110,14 @@
     <div id="result-view" class="view-section">
         <h2 style="color: var(--primary-color)">통계 결과</h2>
         
+        <!-- 서비스 구분 필터 추가 -->
+        <div class="admin-section" id="result-filter-section" style="display: none; background: #e0e7ff; border-color: #c7d2fe;">
+            <label for="category-filter"><strong>📊 서비스 구분 필터: </strong></label>
+            <select id="category-filter" style="padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none;" onchange="applyCategoryFilter()">
+                <option value="전체">전체 (통합)</option>
+            </select>
+        </div>
+
         <div class="admin-section">
             <h3>문항별 평균 점수 요약</h3>
             <table class="summary-table">
@@ -148,6 +156,7 @@
 
     let currentSurveyId = null;
     let currentSurveyConfig = null;
+    let currentResponses = []; // 전체 응답 데이터를 보관하는 변수 추가
     let chartInstances = {};
 
     // ----------------------------------------------------
@@ -158,11 +167,9 @@
         const surveyId = urlParams.get('surveyId');
 
         if (surveyId) {
-            // URL에 surveyId가 있으면 -> 사용자 모드
-            document.getElementById('top-nav').style.display = 'none'; // 관리자 홈 버튼 숨김
+            document.getElementById('top-nav').style.display = 'none'; 
             openSurvey(surveyId);
         } else {
-            // URL에 파라미터가 없으면 -> 관리자 모드
             switchView('admin-list-view');
             loadSurveyList();
         }
@@ -173,17 +180,11 @@
         document.getElementById(viewId).classList.add('active-view');
     };
 
-    // ----------------------------------------------------
-    // 링크 복사 기능 (새로 추가됨)
-    // ----------------------------------------------------
     window.copySurveyLink = function(surveyId) {
-        // 현재 웹페이지의 기본 주소에 ?surveyId=아이디 를 붙여서 링크 생성
         const shareLink = window.location.origin + window.location.pathname + "?surveyId=" + surveyId;
-        
         navigator.clipboard.writeText(shareLink).then(() => {
             alert("설문 참여 링크가 복사되었습니다!\n사용자들에게 이 링크를 공유하세요.\n\n" + shareLink);
         }).catch(err => {
-            // 브라우저 권한 등에 의해 자동복사가 안될 경우 수동 복사용 창 띄움
             prompt("아래 링크를 복사하여 공유하세요:", shareLink);
         });
     };
@@ -250,7 +251,7 @@
         try {
             await addDoc(configCollection, surveyData);
             alert('설문조사가 성공적으로 생성되었습니다!');
-            window.location.reload(); // 저장 후 새로고침하여 리스트로 이동
+            window.location.reload(); 
         } catch (e) {
             console.error(e);
             alert('저장 중 오류가 발생했습니다.');
@@ -340,7 +341,6 @@
                 submittedAt: serverTimestamp()
             });
 
-            // 제출 완료 시 폼을 숨기고 완료 메시지 출력
             document.getElementById('survey-view').innerHTML = `
                 <div style="text-align: center; padding: 60px 20px;">
                     <h2 style="color: var(--primary-color);">✅ 설문 제출이 완료되었습니다.</h2>
@@ -356,19 +356,54 @@
     });
 
     // ----------------------------------------------------
-    // 통계 기능
+    // 통계 기능 (데이터 Fetch 및 필터링 렌더링 분리)
     // ----------------------------------------------------
     window.viewResults = async function(surveyId) {
         switchView('result-view');
         
         const docSnap = await getDoc(doc(db, "surveys", surveyId));
-        const config = docSnap.data();
+        currentSurveyConfig = docSnap.data();
         
         const q = query(responseCollection, where("surveyId", "==", surveyId));
         const responseSnap = await getDocs(q);
-        const responses = [];
-        responseSnap.forEach(doc => responses.push(doc.data()));
+        
+        // 전체 응답 저장
+        currentResponses = [];
+        responseSnap.forEach(doc => currentResponses.push(doc.data()));
 
+        // 카테고리 필터 UI 구성
+        const filterSelect = document.getElementById('category-filter');
+        filterSelect.innerHTML = '<option value="전체">전체 (통합)</option>';
+        
+        if (currentSurveyConfig.categories && currentSurveyConfig.categories.length > 0) {
+            currentSurveyConfig.categories.forEach(cat => {
+                filterSelect.innerHTML += `<option value="${cat}">${cat}</option>`;
+            });
+            document.getElementById('result-filter-section').style.display = 'block';
+        } else {
+            document.getElementById('result-filter-section').style.display = 'none';
+        }
+
+        // 초기 화면은 '전체' 기준으로 렌더링
+        renderResults('전체');
+    };
+
+    // 필터 변경 시 호출되는 함수
+    window.applyCategoryFilter = function() {
+        const selectedCategory = document.getElementById('category-filter').value;
+        renderResults(selectedCategory);
+    };
+
+    // 필터값에 맞게 화면을 갱신하는 함수
+    window.renderResults = function(categoryFilter) {
+        const config = currentSurveyConfig;
+        
+        // 필터링 적용 ('전체'일 경우 모두, 아니면 카테고리 일치하는 것만)
+        const filteredResponses = categoryFilter === '전체' 
+            ? currentResponses 
+            : currentResponses.filter(res => res.category === categoryFilter);
+
+        // 기존 차트 제거
         Object.values(chartInstances).forEach(chart => chart.destroy());
         chartInstances = {};
 
@@ -376,12 +411,13 @@
         const chartContainer = document.getElementById('result-charts-container');
         chartContainer.innerHTML = '';
 
+        // 객관식 문항 처리
         config.scaleQuestions.forEach((qObj, index) => {
             let totalScore = 0;
             let validCount = 0;
             const dist = { '1':0, '2':0, '3':0, '4':0, '5':0, 'none':0 };
 
-            responses.forEach(res => {
+            filteredResponses.forEach(res => {
                 const val = res.answers[qObj.id];
                 if(val) dist[val]++;
                 if(val && val !== 'none') {
@@ -421,14 +457,21 @@
 
         document.getElementById('result-summary-tbody').innerHTML = summaryHtml;
 
+        // 주관식 문항 처리
         const textContainer = document.getElementById('result-text-container');
         textContainer.innerHTML = '<h3 style="margin-top:40px;">주관식 답변 내역</h3>';
         
         config.textQuestions.forEach((qObj, index) => {
-            let answersHtml = responses
-                .map(res => res.answers[qObj.id])
-                .filter(val => val && val.trim() !== '')
-                .map(val => `<div style="background:#fff; border:1px solid #e2e8f0; padding:10px; margin-bottom:5px; border-radius:4px; font-size:14px;">${val}</div>`)
+            let answersHtml = filteredResponses
+                .filter(res => res.answers[qObj.id] && res.answers[qObj.id].trim() !== '')
+                .map(res => `
+                    <div style="background:#fff; border:1px solid #e2e8f0; padding:12px; margin-bottom:10px; border-radius:6px; font-size:14px; line-height: 1.5;">
+                        <span style="display:inline-block; background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; padding:2px 8px; border-radius:12px; font-size:12px; margin-bottom:8px; font-weight:bold;">
+                            ${res.category || '전체'}
+                        </span><br>
+                        ${res.answers[qObj.id].replace(/\n/g, '<br>')}
+                    </div>
+                `)
                 .join('');
             
             if(!answersHtml) answersHtml = '<p style="color:#94a3b8; font-size:14px;">응답이 없습니다.</p>';
