@@ -17,7 +17,7 @@
         .btn-danger { background: #ef4444; color: white; }
         .btn-small { padding: 6px 12px; font-size: 13px; }
         
-        input[type="text"], textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid var(--border-color); border-radius: 6px; box-sizing: border-box; }
+        input[type="text"], input[type="password"], textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid var(--border-color); border-radius: 6px; box-sizing: border-box; }
         .admin-section { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px; background: #f1f5f9; }
         .dynamic-item { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
         .dynamic-item input { flex: 1; margin: 0; }
@@ -45,7 +45,18 @@
 <div class="container">
     <!-- 관리자용 상단 네비게이션 -->
     <div id="top-nav" style="text-align: right; margin-bottom: 20px;">
-        <button class="btn-secondary" onclick="window.location.href = window.location.pathname">⚙️ 관리자 홈</button>
+        <button class="btn-secondary" onclick="goAdminHome()">⚙️ 관리자 홈</button>
+    </div>
+
+    <!-- 0. 관리자 로그인 뷰 (신규) -->
+    <div id="admin-login-view" class="view-section">
+        <h2 style="color: var(--primary-color); text-align: center;">관리자 시스템</h2>
+        <div class="admin-section" style="text-align: center; padding: 40px 20px; max-width: 400px; margin: 0 auto;">
+            <p style="margin-bottom: 20px; font-weight: bold; color: #475569;">관리자 비밀번호를 입력해주세요.</p>
+            <input type="password" id="admin-password" placeholder="비밀번호 입력" style="text-align: center; margin-bottom: 15px;" onkeyup="if(event.key==='Enter') checkAdminPassword()">
+            <br>
+            <button class="btn-primary" style="width: 100%; padding: 12px;" onclick="checkAdminPassword()">로그인</button>
+        </div>
     </div>
 
     <!-- 1. 관리자: 설문 목록 뷰 -->
@@ -163,23 +174,55 @@
     let currentSurveyConfig = null;
     let currentResponses = [];
     let chartInstances = {};
+    
+    // 인증 상태 관리
+    let isAdminAuthenticated = false;
+    const ADMIN_PASSWORD = "22025344";
 
     window.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const surveyId = urlParams.get('surveyId');
 
         if (surveyId) {
+            // 사용자: 설문 링크로 접속한 경우 (비밀번호 불필요)
             document.getElementById('top-nav').style.display = 'none'; 
             openSurvey(surveyId);
         } else {
-            switchView('admin-list-view');
-            loadSurveyList();
+            // 관리자: 관리자 홈 접속 시 로그인 뷰 노출
+            switchView('admin-login-view');
         }
     });
 
     window.switchView = function(viewId) {
         document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active-view'));
         document.getElementById(viewId).classList.add('active-view');
+    };
+
+    // [신규 기능] 관리자 비밀번호 확인
+    window.checkAdminPassword = function() {
+        const inputPwd = document.getElementById('admin-password').value;
+        if (inputPwd === ADMIN_PASSWORD) {
+            isAdminAuthenticated = true;
+            document.getElementById('admin-password').value = ''; // 필드 초기화
+            
+            // 로그인 성공 시 목록 화면으로 이동
+            switchView('admin-list-view');
+            loadSurveyList();
+        } else {
+            alert("비밀번호가 일치하지 않습니다.");
+        }
+    };
+
+    // [신규 기능] 관리자 홈으로 가기 (상단 톱니바퀴 버튼)
+    window.goAdminHome = function() {
+        if (isAdminAuthenticated) {
+            // 이미 로그인 상태면 바로 목록 뷰로 이동
+            switchView('admin-list-view');
+            loadSurveyList();
+        } else {
+            // 인증이 풀려있거나 안된 경우 (혹시 모를 예외상황 대비)
+            switchView('admin-login-view');
+        }
     };
 
     window.copySurveyLink = function(surveyId) {
@@ -191,7 +234,6 @@
         });
     };
 
-    // [기존] 응답 데이터만 초기화
     window.resetSurveyResults = async function(surveyId) {
         const isConfirm = confirm("⚠️ 응답 데이터를 초기화하시겠습니까?\n이 설문조사의 '모든 응답 데이터'만 영구적으로 삭제되며 복구할 수 없습니다. (설문 양식은 유지됨)");
         if (!isConfirm) return;
@@ -218,15 +260,11 @@
         }
     };
 
-    // ----------------------------------------------------
-    // [신규 기능] 설문조사 완전 삭제 (설문지 + 모든 응답 데이터)
-    // ----------------------------------------------------
     window.deleteSurvey = async function(surveyId) {
         const isConfirm = confirm("⛔ 정말 설문조사를 삭제하시겠습니까?\n설문 양식과 등록된 '모든 응답 데이터'가 영구적으로 삭제되며 절대 복구할 수 없습니다.");
         if (!isConfirm) return;
 
         try {
-            // 1. 해당 설문에 연결된 응답 데이터 모두 가져와서 삭제
             const q = query(responseCollection, where("surveyId", "==", surveyId));
             const snapshot = await getDocs(q);
             
@@ -235,15 +273,11 @@
                 deletePromises.push(deleteDoc(doc(db, "survey_responses", docSnap.id)));
             });
 
-            // 2. 설문조사 본체(config) 데이터 삭제 추가
             deletePromises.push(deleteDoc(doc(db, "surveys", surveyId)));
 
-            // 3. 병렬로 모두 삭제될 때까지 대기
             await Promise.all(deletePromises);
             
             alert(`✅ 설문조사와 연결된 응답 데이터(${snapshot.size}건)가 완전히 삭제되었습니다.`);
-            
-            // 삭제 완료 후 목록 새로고침
             loadSurveyList();
         } catch (e) {
             console.error("설문조사 삭제 중 오류 발생:", e);
@@ -251,7 +285,6 @@
         }
     };
 
-    // 엑셀 (CSV) 다운로드 - 리포트 형식
     window.exportToExcel = function() {
         if (!currentResponses || currentResponses.length === 0) {
             alert("다운로드할 응답 데이터가 없습니다.");
@@ -367,7 +400,6 @@
             const data = doc.data();
             const dateStr = data.createdAt ? new Date(data.createdAt.toDate()).toLocaleDateString() : '최근';
             
-            // 삭제 버튼 UI 추가
             html += `
                 <div class="survey-list-item">
                     <div class="survey-list-item-header">
@@ -408,7 +440,9 @@
         try {
             await addDoc(configCollection, surveyData);
             alert('설문조사가 성공적으로 생성되었습니다!');
-            window.location.reload(); 
+            // 저장 후 현재 화면에서 즉시 목록 뷰로 이동 (새로고침 시 로그인 풀림 방지)
+            switchView('admin-list-view');
+            loadSurveyList(); 
         } catch (e) {
             console.error(e);
             alert('저장 중 오류가 발생했습니다.');
