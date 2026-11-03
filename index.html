@@ -113,11 +113,9 @@
     <div id="result-view" class="view-section">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h2 style="color: var(--primary-color); margin: 0;">통계 결과</h2>
-            <!-- 엑셀 다운로드 버튼 -->
-            <button class="btn-primary" style="background: #10b981;" onclick="exportToExcel()">📥 엑셀 다운로드</button>
+            <button class="btn-primary" style="background: #10b981;" onclick="exportToExcel()">📥 엑셀 리포트 다운로드</button>
         </div>
         
-        <!-- 서비스 구분 필터 -->
         <div class="admin-section" id="result-filter-section" style="display: none; background: #e0e7ff; border-color: #c7d2fe;">
             <label for="category-filter"><strong>📊 서비스 구분 필터: </strong></label>
             <select id="category-filter" style="padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none;" onchange="applyCategoryFilter()">
@@ -166,9 +164,6 @@
     let currentResponses = [];
     let chartInstances = {};
 
-    // ----------------------------------------------------
-    // 초기화: URL 파라미터 확인 후 라우팅
-    // ----------------------------------------------------
     window.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const surveyId = urlParams.get('surveyId');
@@ -196,9 +191,6 @@
         });
     };
 
-    // ----------------------------------------------------
-    // [신규 기능] 결과 초기화 (응답 데이터 전체 삭제)
-    // ----------------------------------------------------
     window.resetSurveyResults = async function(surveyId) {
         const isConfirm = confirm("⚠️ 정말 삭제하시겠습니까?\n이 설문조사의 '모든 응답 데이터'가 영구적으로 삭제되며 복구할 수 없습니다.");
         if (!isConfirm) return;
@@ -212,15 +204,12 @@
                 return;
             }
 
-            // 개별 문서 삭제 프로세스 생성
             const deletePromises = [];
             snapshot.forEach(docSnap => {
                 deletePromises.push(deleteDoc(doc(db, "survey_responses", docSnap.id)));
             });
 
-            // 병렬로 삭제 처리 대기
             await Promise.all(deletePromises);
-            
             alert(`✅ 성공적으로 ${deletePromises.length}개의 응답 데이터가 초기화되었습니다.`);
         } catch (e) {
             console.error("응답 삭제 중 오류 발생:", e);
@@ -229,7 +218,7 @@
     };
 
     // ----------------------------------------------------
-    // [신규 기능] 엑셀 (CSV) 다운로드
+    // [개선된 기능] 엑셀 (CSV) 다운로드 - 리포트 형식 (전체 -> 객관식 -> 주관식 및 카테고리별)
     // ----------------------------------------------------
     window.exportToExcel = function() {
         if (!currentResponses || currentResponses.length === 0) {
@@ -238,42 +227,81 @@
         }
 
         const config = currentSurveyConfig;
-        
-        // 1. 헤더 만들기
-        let headers = ['응답 일시', '서비스 구분'];
-        config.scaleQuestions.forEach(q => headers.push(q.text.replace(/,/g, ' '))); // 쉼표 이스케이프 처리
-        config.textQuestions.forEach(q => headers.push(q.text.replace(/,/g, ' ')));
-        
-        // UTF-8 BOM 추가 (한글 깨짐 방지)
-        let csvContent = "\uFEFF" + headers.join(',') + "\n";
+        let csvContent = "\uFEFF"; // UTF-8 BOM
 
-        // 2. 데이터 행 만들기 (전체 응답 데이터 기준)
-        currentResponses.forEach(res => {
-            let row = [];
-            
-            // 일시 처리
-            let dateStr = "";
-            if(res.submittedAt && res.submittedAt.toDate) {
-                dateStr = res.submittedAt.toDate().toLocaleString('ko-KR');
+        // 데이터 구분을 위한 배열: '전체' + 개별 카테고리
+        const targetCategories = ['전체'];
+        if (config.categories && config.categories.length > 0) {
+            targetCategories.push(...config.categories);
+        }
+
+        targetCategories.forEach(category => {
+            const filteredResponses = category === '전체' 
+                ? currentResponses 
+                : currentResponses.filter(res => res.category === category);
+
+            csvContent += `[ 데이터 구분 : ${category} ]\n`;
+
+            if (filteredResponses.length === 0) {
+                csvContent += "응답 데이터가 없습니다.\n\n\n";
+                return; // 다음 카테고리로 넘어감
             }
-            row.push(`"${dateStr}"`); // 따옴표로 감싸기
+
+            // 1. 객관식 결과 요약
+            if (config.scaleQuestions && config.scaleQuestions.length > 0) {
+                csvContent += "-- 객관식 결과 --\n";
+                csvContent += "문항,1점,2점,3점,4점,5점,해당없음,유효응답수,평균점수\n";
+                
+                config.scaleQuestions.forEach((qObj, index) => {
+                    let totalScore = 0;
+                    let validCount = 0;
+                    const dist = { '1':0, '2':0, '3':0, '4':0, '5':0, 'none':0 };
+
+                    filteredResponses.forEach(res => {
+                        const val = res.answers[qObj.id];
+                        if(val) dist[val]++;
+                        if(val && val !== 'none') {
+                            totalScore += parseInt(val);
+                            validCount++;
+                        }
+                    });
+
+                    const avg = validCount > 0 ? (totalScore / validCount).toFixed(2) : '0.00';
+                    const qText = qObj.text.replace(/"/g, '""'); // 쌍따옴표 이스케이프 처리
+                    
+                    csvContent += `"${index+1}. ${qText}",${dist['1']},${dist['2']},${dist['3']},${dist['4']},${dist['5']},${dist['none']},${validCount},${avg}\n`;
+                });
+                csvContent += "\n";
+            }
+
+            // 2. 주관식 결과 요약 (객관식 바로 아래에 출력)
+            if (config.textQuestions && config.textQuestions.length > 0) {
+                csvContent += "-- 주관식 결과 --\n";
+                csvContent += "문항,응답내용\n";
+
+                config.textQuestions.forEach((qObj, index) => {
+                    const qText = qObj.text.replace(/"/g, '""');
+                    let hasAnswers = false;
+
+                    filteredResponses.forEach(res => {
+                        let ans = res.answers[qObj.id];
+                        if (ans && ans.trim() !== '') {
+                            // 엑셀 내 한 셀에서 줄바꿈이 정상 처리되도록 쌍따옴표로 감싸고 기존 쌍따옴표는 두개("")로 변환
+                            ans = ans.replace(/"/g, '""');
+                            csvContent += `"${index+1}. ${qText}","${ans}"\n`;
+                            hasAnswers = true;
+                        }
+                    });
+
+                    if (!hasAnswers) {
+                        csvContent += `"${index+1}. ${qText}","(해당 문항에 대한 응답이 없습니다)"\n`;
+                    }
+                });
+                csvContent += "\n";
+            }
             
-            // 서비스 구분
-            row.push(`"${res.category || '전체'}"`);
-
-            // 객관식 답변
-            config.scaleQuestions.forEach(q => {
-                row.push(`"${res.answers[q.id] || ''}"`);
-            });
-
-            // 주관식 답변 (줄바꿈 및 쌍따옴표 이스케이프 처리)
-            config.textQuestions.forEach(q => {
-                let ans = res.answers[q.id] || '';
-                ans = ans.replace(/"/g, '""').replace(/\n/g, ' '); 
-                row.push(`"${ans}"`);
-            });
-
-            csvContent += row.join(',') + "\n";
+            // 카테고리 간 구분선 추가
+            csvContent += "========================================================\n\n";
         });
 
         // 3. Blob 파일 생성 및 다운로드 링크 클릭
@@ -281,16 +309,13 @@
         const link = document.createElement("a");
         const url = URL.createObjectURL(blob);
         link.setAttribute("href", url);
-        link.setAttribute("download", `${config.title || '설문결과'}_응답데이터.csv`);
+        link.setAttribute("download", `${config.title || '설문결과'}_통계리포트.csv`);
         link.style.visibility = 'hidden';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     };
 
-    // ----------------------------------------------------
-    // 관리자: 목록 및 저장 기능
-    // ----------------------------------------------------
     window.addAdminInput = function(containerId, placeholder, value = '') {
         const div = document.createElement('div');
         div.className = 'dynamic-item';
@@ -361,9 +386,6 @@
         }
     };
 
-    // ----------------------------------------------------
-    // 사용자 설문 화면 및 제출
-    // ----------------------------------------------------
     window.openSurvey = async function(surveyId) {
         currentSurveyId = surveyId;
         switchView('survey-view');
@@ -458,9 +480,6 @@
         }
     });
 
-    // ----------------------------------------------------
-    // 통계 기능
-    // ----------------------------------------------------
     window.viewResults = async function(surveyId) {
         switchView('result-view');
         
