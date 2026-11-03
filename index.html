@@ -10,11 +10,12 @@
         body { font-family: 'Pretendard', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; background: var(--card-bg); padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); position: relative; }
         
-        button { cursor: pointer; border: none; border-radius: 6px; padding: 10px 15px; font-weight: bold; }
+        button { cursor: pointer; border: none; border-radius: 6px; padding: 10px 15px; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
         .btn-primary { background: var(--primary-color); color: white; }
         .btn-secondary { background: #64748b; color: white; }
         .btn-danger { background: #ef4444; color: white; }
-        .btn-small { padding: 5px 10px; font-size: 12px; }
+        .btn-small { padding: 6px 12px; font-size: 13px; }
         
         input[type="text"], textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid var(--border-color); border-radius: 6px; box-sizing: border-box; }
         .admin-section { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px; background: #f1f5f9; }
@@ -29,7 +30,9 @@
         .view-section { display: none; }
         .active-view { display: block; }
         
-        .survey-list-item { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .survey-list-item { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .survey-list-item-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .survey-list-actions { display: flex; gap: 8px; flex-wrap: wrap; }
         
         .chart-container { position: relative; height: 250px; width: 100%; margin-top: 15px; }
         .summary-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
@@ -40,7 +43,7 @@
 <body>
 
 <div class="container">
-    <!-- 관리자용 상단 네비게이션 (사용자 모드에서는 숨김 처리됨) -->
+    <!-- 관리자용 상단 네비게이션 -->
     <div id="top-nav" style="text-align: right; margin-bottom: 20px;">
         <button class="btn-secondary" onclick="window.location.href = window.location.pathname">⚙️ 관리자 홈</button>
     </div>
@@ -84,7 +87,7 @@
         <button class="btn-primary" style="width: 100%; padding: 15px;" onclick="saveSurveyConfig()">설문 저장하기</button>
     </div>
 
-    <!-- 3. 사용자: 설문 작성 뷰 (링크를 타고 들어온 사용자가 보는 화면) -->
+    <!-- 3. 사용자: 설문 작성 뷰 -->
     <div id="survey-view" class="view-section">
         <h1 id="survey-title">불러오는 중...</h1>
         <p class="desc" id="survey-desc" style="text-align: center; color: #64748b;"></p>
@@ -108,9 +111,13 @@
 
     <!-- 4. 관리자: 통계 결과 뷰 -->
     <div id="result-view" class="view-section">
-        <h2 style="color: var(--primary-color)">통계 결과</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="color: var(--primary-color); margin: 0;">통계 결과</h2>
+            <!-- 엑셀 다운로드 버튼 -->
+            <button class="btn-primary" style="background: #10b981;" onclick="exportToExcel()">📥 엑셀 다운로드</button>
+        </div>
         
-        <!-- 서비스 구분 필터 추가 -->
+        <!-- 서비스 구분 필터 -->
         <div class="admin-section" id="result-filter-section" style="display: none; background: #e0e7ff; border-color: #c7d2fe;">
             <label for="category-filter"><strong>📊 서비스 구분 필터: </strong></label>
             <select id="category-filter" style="padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1; outline: none;" onchange="applyCategoryFilter()">
@@ -135,7 +142,7 @@
 <!-- Firebase SDK -->
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
-    import { getFirestore, collection, addDoc, getDocs, doc, getDoc, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+    import { getFirestore, collection, addDoc, getDocs, doc, getDoc, query, where, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 
     // ✅ [주의] 아래 내용을 본인의 새 파이어베이스 설정값으로 교체하세요!
     const firebaseConfig = {
@@ -156,7 +163,7 @@
 
     let currentSurveyId = null;
     let currentSurveyConfig = null;
-    let currentResponses = []; // 전체 응답 데이터를 보관하는 변수 추가
+    let currentResponses = [];
     let chartInstances = {};
 
     // ----------------------------------------------------
@@ -190,7 +197,99 @@
     };
 
     // ----------------------------------------------------
-    // 관리자 기능
+    // [신규 기능] 결과 초기화 (응답 데이터 전체 삭제)
+    // ----------------------------------------------------
+    window.resetSurveyResults = async function(surveyId) {
+        const isConfirm = confirm("⚠️ 정말 삭제하시겠습니까?\n이 설문조사의 '모든 응답 데이터'가 영구적으로 삭제되며 복구할 수 없습니다.");
+        if (!isConfirm) return;
+
+        try {
+            const q = query(responseCollection, where("surveyId", "==", surveyId));
+            const snapshot = await getDocs(q);
+            
+            if (snapshot.empty) {
+                alert("삭제할 응답 데이터가 없습니다.");
+                return;
+            }
+
+            // 개별 문서 삭제 프로세스 생성
+            const deletePromises = [];
+            snapshot.forEach(docSnap => {
+                deletePromises.push(deleteDoc(doc(db, "survey_responses", docSnap.id)));
+            });
+
+            // 병렬로 삭제 처리 대기
+            await Promise.all(deletePromises);
+            
+            alert(`✅ 성공적으로 ${deletePromises.length}개의 응답 데이터가 초기화되었습니다.`);
+        } catch (e) {
+            console.error("응답 삭제 중 오류 발생:", e);
+            alert("삭제 중 오류가 발생했습니다. 개발자 도구를 확인하세요.");
+        }
+    };
+
+    // ----------------------------------------------------
+    // [신규 기능] 엑셀 (CSV) 다운로드
+    // ----------------------------------------------------
+    window.exportToExcel = function() {
+        if (!currentResponses || currentResponses.length === 0) {
+            alert("다운로드할 응답 데이터가 없습니다.");
+            return;
+        }
+
+        const config = currentSurveyConfig;
+        
+        // 1. 헤더 만들기
+        let headers = ['응답 일시', '서비스 구분'];
+        config.scaleQuestions.forEach(q => headers.push(q.text.replace(/,/g, ' '))); // 쉼표 이스케이프 처리
+        config.textQuestions.forEach(q => headers.push(q.text.replace(/,/g, ' ')));
+        
+        // UTF-8 BOM 추가 (한글 깨짐 방지)
+        let csvContent = "\uFEFF" + headers.join(',') + "\n";
+
+        // 2. 데이터 행 만들기 (전체 응답 데이터 기준)
+        currentResponses.forEach(res => {
+            let row = [];
+            
+            // 일시 처리
+            let dateStr = "";
+            if(res.submittedAt && res.submittedAt.toDate) {
+                dateStr = res.submittedAt.toDate().toLocaleString('ko-KR');
+            }
+            row.push(`"${dateStr}"`); // 따옴표로 감싸기
+            
+            // 서비스 구분
+            row.push(`"${res.category || '전체'}"`);
+
+            // 객관식 답변
+            config.scaleQuestions.forEach(q => {
+                row.push(`"${res.answers[q.id] || ''}"`);
+            });
+
+            // 주관식 답변 (줄바꿈 및 쌍따옴표 이스케이프 처리)
+            config.textQuestions.forEach(q => {
+                let ans = res.answers[q.id] || '';
+                ans = ans.replace(/"/g, '""').replace(/\n/g, ' '); 
+                row.push(`"${ans}"`);
+            });
+
+            csvContent += row.join(',') + "\n";
+        });
+
+        // 3. Blob 파일 생성 및 다운로드 링크 클릭
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", `${config.title || '설문결과'}_응답데이터.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    // ----------------------------------------------------
+    // 관리자: 목록 및 저장 기능
     // ----------------------------------------------------
     window.addAdminInput = function(containerId, placeholder, value = '') {
         const div = document.createElement('div');
@@ -215,15 +314,19 @@
         let html = '';
         snapshot.forEach(doc => {
             const data = doc.data();
+            const dateStr = data.createdAt ? new Date(data.createdAt.toDate()).toLocaleDateString() : '최근';
             html += `
                 <div class="survey-list-item">
-                    <div>
-                        <strong>${data.title}</strong><br>
-                        <small style="color: #64748b">등록일: ${data.createdAt ? new Date(data.createdAt.toDate()).toLocaleDateString() : '최근'}</small>
+                    <div class="survey-list-item-header">
+                        <div>
+                            <strong style="font-size: 16px;">${data.title}</strong><br>
+                            <small style="color: #64748b">등록일: ${dateStr}</small>
+                        </div>
                     </div>
-                    <div style="display:flex; gap:8px;">
+                    <div class="survey-list-actions">
                         <button class="btn-primary btn-small" onclick="copySurveyLink('${doc.id}')">🔗 링크 복사</button>
                         <button class="btn-secondary btn-small" onclick="viewResults('${doc.id}')">📊 결과 통계</button>
+                        <button class="btn-danger btn-small" onclick="resetSurveyResults('${doc.id}')">🗑️ 응답 초기화</button>
                     </div>
                 </div>
             `;
@@ -356,7 +459,7 @@
     });
 
     // ----------------------------------------------------
-    // 통계 기능 (데이터 Fetch 및 필터링 렌더링 분리)
+    // 통계 기능
     // ----------------------------------------------------
     window.viewResults = async function(surveyId) {
         switchView('result-view');
@@ -367,11 +470,9 @@
         const q = query(responseCollection, where("surveyId", "==", surveyId));
         const responseSnap = await getDocs(q);
         
-        // 전체 응답 저장
         currentResponses = [];
         responseSnap.forEach(doc => currentResponses.push(doc.data()));
 
-        // 카테고리 필터 UI 구성
         const filterSelect = document.getElementById('category-filter');
         filterSelect.innerHTML = '<option value="전체">전체 (통합)</option>';
         
@@ -384,26 +485,21 @@
             document.getElementById('result-filter-section').style.display = 'none';
         }
 
-        // 초기 화면은 '전체' 기준으로 렌더링
         renderResults('전체');
     };
 
-    // 필터 변경 시 호출되는 함수
     window.applyCategoryFilter = function() {
         const selectedCategory = document.getElementById('category-filter').value;
         renderResults(selectedCategory);
     };
 
-    // 필터값에 맞게 화면을 갱신하는 함수
     window.renderResults = function(categoryFilter) {
         const config = currentSurveyConfig;
         
-        // 필터링 적용 ('전체'일 경우 모두, 아니면 카테고리 일치하는 것만)
         const filteredResponses = categoryFilter === '전체' 
             ? currentResponses 
             : currentResponses.filter(res => res.category === categoryFilter);
 
-        // 기존 차트 제거
         Object.values(chartInstances).forEach(chart => chart.destroy());
         chartInstances = {};
 
@@ -411,7 +507,6 @@
         const chartContainer = document.getElementById('result-charts-container');
         chartContainer.innerHTML = '';
 
-        // 객관식 문항 처리
         config.scaleQuestions.forEach((qObj, index) => {
             let totalScore = 0;
             let validCount = 0;
@@ -457,7 +552,6 @@
 
         document.getElementById('result-summary-tbody').innerHTML = summaryHtml;
 
-        // 주관식 문항 처리
         const textContainer = document.getElementById('result-text-container');
         textContainer.innerHTML = '<h3 style="margin-top:40px;">주관식 답변 내역</h3>';
         
