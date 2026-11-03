@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>동적 설문조사 시스템</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --primary-color: #2563eb; --bg-color: #f8fafc; --card-bg: #ffffff; --text-color: #1e293b; --border-color: #cbd5e1; }
+        body { font-family: 'Pretendard', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: var(--card-bg); padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); position: relative; }
+        
+        /* 공통 버튼 스타일 */
+        button { cursor: pointer; border: none; border-radius: 6px; padding: 10px 15px; font-weight: bold; }
+        .btn-primary { background: var(--primary-color); color: white; }
+        .btn-secondary { background: #64748b; color: white; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-small { padding: 5px 10px; font-size: 12px; }
+        
+        /* 폼 요소 */
+        input[type="text"], textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid var(--border-color); border-radius: 6px; box-sizing: border-box; }
+        .admin-section { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 20px; background: #f1f5f9; }
+        .dynamic-item { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .dynamic-item input { flex: 1; margin: 0; }
+        
+        /* 설문 UI (기존 재사용) */
+        .category-card { background: #eef2ff; border: 2px solid #c7d2fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .question-card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .options { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 10px; }
+        .options label { font-size: 14px; cursor: pointer; }
+        
+        /* 뷰 컨트롤 */
+        .view-section { display: none; }
+        .active-view { display: block; }
+        
+        /* 관리자 리스트 */
+        .survey-list-item { border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* 통계 차트 */
+        .chart-container { position: relative; height: 250px; width: 100%; margin-top: 15px; }
+        .summary-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        .summary-table th, .summary-table td { border: 1px solid #cbd5e1; padding: 10px; text-align: center; }
+        .summary-table th { background-color: #f1f5f9; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div style="text-align: right; margin-bottom: 20px;">
+        <button class="btn-secondary" onclick="switchView('admin-list-view')">⚙️ 관리자 홈</button>
+    </div>
+
+    <!-- 1. 관리자: 설문 목록 뷰 -->
+    <div id="admin-list-view" class="view-section active-view">
+        <h2 style="color: var(--primary-color)">설문조사 관리</h2>
+        <button class="btn-primary" onclick="switchView('admin-edit-view')" style="margin-bottom: 20px;">+ 새 설문조사 만들기</button>
+        <div id="survey-list-container">로딩 중...</div>
+    </div>
+
+    <!-- 2. 관리자: 설문 생성/수정 뷰 -->
+    <div id="admin-edit-view" class="view-section">
+        <h2 style="color: var(--primary-color)">설문 양식 설정</h2>
+        <div class="admin-section">
+            <label>설문 제목</label>
+            <input type="text" id="admin-title" placeholder="예: 2024년 상반기 RPA 만족도 조사">
+            <br><br>
+            <label>설문 안내문</label>
+            <textarea id="admin-desc" rows="2" placeholder="설문에 대한 안내를 적어주세요."></textarea>
+        </div>
+
+        <div class="admin-section">
+            <label><strong>서비스 구분 (카테고리)</strong></label>
+            <div id="admin-categories"></div>
+            <button class="btn-secondary btn-small" onclick="addAdminInput('admin-categories', '카테고리명 (예: 렌탈)')">+ 구분 추가</button>
+        </div>
+
+        <div class="admin-section">
+            <label><strong>객관식 질문 (1~5점 척도)</strong></label>
+            <div id="admin-scale-questions"></div>
+            <button class="btn-secondary btn-small" onclick="addAdminInput('admin-scale-questions', '질문 내용')">+ 객관식 질문 추가</button>
+        </div>
+
+        <div class="admin-section">
+            <label><strong>주관식 질문 (텍스트 입력)</strong></label>
+            <div id="admin-text-questions"></div>
+            <button class="btn-secondary btn-small" onclick="addAdminInput('admin-text-questions', '질문 내용')">+ 주관식 질문 추가</button>
+        </div>
+
+        <button class="btn-primary" style="width: 100%; padding: 15px;" onclick="saveSurveyConfig()">설문 저장하기</button>
+    </div>
+
+    <!-- 3. 사용자: 설문 작성 뷰 (동적 렌더링) -->
+    <div id="survey-view" class="view-section">
+        <h1 id="survey-title">설문조사 제목</h1>
+        <p class="desc" id="survey-desc" style="text-align: center; color: #64748b;">안내문</p>
+        
+        <div class="admin-section" style="background:#eff6ff;">
+            <strong>[응답 기준]</strong> 5점 척도 (1: 전혀 아님 ~ 5: 매우 그렇다 / 해당 없음)<br>
+        </div>
+
+        <form id="dynamic-form">
+            <div class="category-card" id="render-categories" style="display: none;">
+                <strong>서비스 구분 *</strong>
+                <div class="options" id="category-options"></div>
+            </div>
+            
+            <div id="render-scale-questions"></div>
+            <div id="render-text-questions"></div>
+
+            <button type="submit" class="btn-primary" style="width: 100%; padding: 15px; margin-top: 20px;">설문 제출</button>
+        </form>
+    </div>
+
+    <!-- 4. 관리자: 통계 결과 뷰 -->
+    <div id="result-view" class="view-section">
+        <h2 style="color: var(--primary-color)">통계 결과</h2>
+        <div id="filter-container" style="margin-bottom: 20px;"></div>
+        
+        <div class="admin-section">
+            <h3>문항별 평균 점수 요약</h3>
+            <table class="summary-table">
+                <thead><tr><th>문항</th><th>유효 응답수</th><th>평균 점수</th></tr></thead>
+                <tbody id="result-summary-tbody"></tbody>
+            </table>
+        </div>
+
+        <div id="result-charts-container"></div>
+        <div id="result-text-container"></div>
+    </div>
+
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, getDocs, doc, getDoc, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+
+    // Firebase 설정 (기존 정보 유지)
+    const firebaseConfig = {
+        apiKey: "AIzaSyDhUiKlIqza1b5f2vZw5jt3cFkiJ952voQ",
+        authDomain: "rpa-survey.firebaseapp.com",
+        projectId: "rpa-survey",
+        storageBucket: "rpa-survey.firebasestorage.app",
+        messagingSenderId: "169954559654",
+        appId: "1:169954559654:web:d37f9f51a2bc2247129667",
+        measurementId: "G-6NK36MZW13"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    
+    // DB 컬렉션
+    const configCollection = collection(db, "surveys"); // 설문 양식 저장소
+    const responseCollection = collection(db, "survey_responses"); // 사용자 응답 저장소
+
+    // 전역 변수
+    let currentSurveyId = null;
+    let currentSurveyConfig = null;
+    let chartInstances = {};
+
+    // ----------------------------------------------------
+    // 공통 기능: 뷰 전환
+    // ----------------------------------------------------
+    window.switchView = function(viewId) {
+        document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active-view'));
+        document.getElementById(viewId).classList.add('active-view');
+        if(viewId === 'admin-list-view') loadSurveyList();
+    };
+
+    // ----------------------------------------------------
+    // 관리자 기능: 설문 목록 및 생성
+    // ----------------------------------------------------
+    window.addAdminInput = function(containerId, placeholder, value = '') {
+        const div = document.createElement('div');
+        div.className = 'dynamic-item';
+        div.innerHTML = `
+            <input type="text" placeholder="${placeholder}" value="${value}">
+            <button type="button" class="btn-danger btn-small" onclick="this.parentElement.remove()">삭제</button>
+        `;
+        document.getElementById(containerId).appendChild(div);
+    };
+
+    async function loadSurveyList() {
+        const container = document.getElementById('survey-list-container');
+        container.innerHTML = '불러오는 중...';
+        const snapshot = await getDocs(configCollection);
+        
+        if (snapshot.empty) {
+            container.innerHTML = '<p>등록된 설문조사가 없습니다.</p>';
+            return;
+        }
+
+        let html = '';
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            html += `
+                <div class="survey-list-item">
+                    <div>
+                        <strong>${data.title}</strong><br>
+                        <small style="color: #64748b">ID: ${doc.id}</small>
+                    </div>
+                    <div style="display:flex; gap:5px;">
+                        <button class="btn-primary btn-small" onclick="openSurvey('${doc.id}')">참여 링크</button>
+                        <button class="btn-secondary btn-small" onclick="viewResults('${doc.id}')">결과 통계</button>
+                    </div>
+                </div>
+            `;
+        });
+        container.innerHTML = html;
+    }
+
+    window.saveSurveyConfig = async function() {
+        const title = document.getElementById('admin-title').value.trim();
+        const desc = document.getElementById('admin-desc').value.trim();
+        
+        const getValues = (id) => Array.from(document.getElementById(id).querySelectorAll('input')).map(input => input.value.trim()).filter(v => v !== '');
+
+        const categories = getValues('admin-categories');
+        const scaleQuestions = getValues('admin-scale-questions').map((text, idx) => ({ id: `sq${idx+1}`, text }));
+        const textQuestions = getValues('admin-text-questions').map((text, idx) => ({ id: `tq${idx+1}`, text }));
+
+        if (!title) return alert('설문 제목을 입력하세요.');
+
+        const surveyData = {
+            title, desc, categories, scaleQuestions, textQuestions,
+            createdAt: serverTimestamp()
+        };
+
+        try {
+            await addDoc(configCollection, surveyData);
+            alert('설문조사가 성공적으로 생성되었습니다!');
+            switchView('admin-list-view');
+            // 폼 초기화
+            document.getElementById('admin-title').value = '';
+            document.getElementById('admin-desc').value = '';
+            ['admin-categories', 'admin-scale-questions', 'admin-text-questions'].forEach(id => document.getElementById(id).innerHTML = '');
+        } catch (e) {
+            console.error(e);
+            alert('저장 중 오류가 발생했습니다.');
+        }
+    };
+
+    // ----------------------------------------------------
+    // 사용자 기능: 설문 렌더링 및 제출
+    // ----------------------------------------------------
+    window.openSurvey = async function(surveyId) {
+        currentSurveyId = surveyId;
+        switchView('survey-view');
+        
+        try {
+            const docSnap = await getDoc(doc(db, "surveys", surveyId));
+            if (!docSnap.exists()) return alert("존재하지 않는 설문입니다.");
+            
+            currentSurveyConfig = docSnap.data();
+            
+            document.getElementById('survey-title').innerText = currentSurveyConfig.title;
+            document.getElementById('survey-desc').innerText = currentSurveyConfig.desc;
+
+            // 카테고리 (구분) 렌더링
+            const catContainer = document.getElementById('category-options');
+            catContainer.innerHTML = '';
+            if (currentSurveyConfig.categories && currentSurveyConfig.categories.length > 0) {
+                document.getElementById('render-categories').style.display = 'block';
+                currentSurveyConfig.categories.forEach((cat, i) => {
+                    catContainer.innerHTML += `<label><input type="radio" name="category" value="${cat}" ${i===0?'required':''}> ${cat}</label>`;
+                });
+            } else {
+                document.getElementById('render-categories').style.display = 'none';
+            }
+
+            // 객관식 렌더링
+            const sqContainer = document.getElementById('render-scale-questions');
+            sqContainer.innerHTML = currentSurveyConfig.scaleQuestions.map((q, i) => `
+                <div class="question-card">
+                    <strong>${i+1}. ${q.text}</strong>
+                    <div class="options">
+                        <label><input type="radio" name="${q.id}" value="1" required> 1점 (전혀 아님)</label>
+                        <label><input type="radio" name="${q.id}" value="2" required> 2점</label>
+                        <label><input type="radio" name="${q.id}" value="3" required> 3점 (보통)</label>
+                        <label><input type="radio" name="${q.id}" value="4" required> 4점</label>
+                        <label><input type="radio" name="${q.id}" value="5" required> 5점 (매우 그렇다)</label>
+                        <label><input type="radio" name="${q.id}" value="none" required> 해당 없음</label>
+                    </div>
+                </div>
+            `).join('');
+
+            // 주관식 렌더링
+            const tqContainer = document.getElementById('render-text-questions');
+            tqContainer.innerHTML = currentSurveyConfig.textQuestions.map((q, i) => `
+                <div class="question-card">
+                    <strong>${i+1}. ${q.text}</strong>
+                    <textarea name="${q.id}" rows="3" placeholder="자유롭게 작성해주세요."></textarea>
+                </div>
+            `).join('');
+
+        } catch (e) {
+            console.error(e);
+            alert("설문 데이터를 불러오지 못했습니다.");
+        }
+    };
+
+    document.getElementById('dynamic-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.innerText = "제출 중...";
+
+        const formData = new FormData(this);
+        const answers = {};
+        
+        for (let [key, value] of formData.entries()) {
+            answers[key] = value;
+        }
+
+        const category = answers['category'] || '전체';
+        delete answers['category'];
+
+        try {
+            await addDoc(responseCollection, {
+                surveyId: currentSurveyId,
+                category: category,
+                answers: answers,
+                submittedAt: serverTimestamp()
+            });
+            alert("설문이 제출되었습니다. 감사합니다!");
+            window.location.reload();
+        } catch (e) {
+            console.error(e);
+            alert("제출 실패. 다시 시도해주세요.");
+            submitBtn.disabled = false;
+        }
+    });
+
+    // ----------------------------------------------------
+    // 통계 기능: 특정 설문 결과 조회
+    // ----------------------------------------------------
+    window.viewResults = async function(surveyId) {
+        switchView('result-view');
+        
+        // 1. 설문 양식 정보 가져오기
+        const docSnap = await getDoc(doc(db, "surveys", surveyId));
+        const config = docSnap.data();
+        
+        // 2. 해당 설문의 응답 데이터만 가져오기
+        const q = query(responseCollection, where("surveyId", "==", surveyId));
+        const responseSnap = await getDocs(q);
+        const responses = [];
+        responseSnap.forEach(doc => responses.push(doc.data()));
+
+        // 기존 차트 초기화
+        Object.values(chartInstances).forEach(chart => chart.destroy());
+        chartInstances = {};
+
+        // 요약 테이블 계산
+        let summaryHtml = '';
+        const chartContainer = document.getElementById('result-charts-container');
+        chartContainer.innerHTML = '';
+
+        config.scaleQuestions.forEach((qObj, index) => {
+            let totalScore = 0;
+            let validCount = 0;
+            const dist = { '1':0, '2':0, '3':0, '4':0, '5':0, 'none':0 };
+
+            responses.forEach(res => {
+                const val = res.answers[qObj.id];
+                if(val) dist[val]++;
+                if(val && val !== 'none') {
+                    totalScore += parseInt(val);
+                    validCount++;
+                }
+            });
+
+            const avg = validCount > 0 ? (totalScore / validCount).toFixed(2) : '0.00';
+            summaryHtml += `<tr><td style="text-align:left;">${index+1}. ${qObj.text}</td><td>${validCount}명</td><td><strong>${avg}점</strong></td></tr>`;
+
+            // 차트 렌더링
+            const canvasId = `chart_${qObj.id}`;
+            chartContainer.innerHTML += `
+                <div class="question-card">
+                    <strong>${qObj.text}</strong> (평균: ${avg}점)
+                    <div class="chart-container"><canvas id="${canvasId}"></canvas></div>
+                </div>
+            `;
+
+            // DOM 업데이트 후 차트 생성 지연 실행
+            setTimeout(() => {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                chartInstances[canvasId] = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['1점', '2점', '3점', '4점', '5점', '해당없음'],
+                        datasets: [{
+                            label: '응답 수',
+                            data: [dist['1'], dist['2'], dist['3'], dist['4'], dist['5'], dist['none']],
+                            backgroundColor: '#3b82f6',
+                            borderRadius: 4
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                });
+            }, 50);
+        });
+
+        document.getElementById('result-summary-tbody').innerHTML = summaryHtml;
+
+        // 주관식 답변 렌더링
+        const textContainer = document.getElementById('result-text-container');
+        textContainer.innerHTML = '<h3 style="margin-top:40px;">주관식 답변 내역</h3>';
+        
+        config.textQuestions.forEach((qObj, index) => {
+            let answersHtml = responses
+                .map(res => res.answers[qObj.id])
+                .filter(val => val && val.trim() !== '')
+                .map(val => `<div style="background:#fff; border:1px solid #e2e8f0; padding:10px; margin-bottom:5px; border-radius:4px; font-size:14px;">${val}</div>`)
+                .join('');
+            
+            if(!answersHtml) answersHtml = '<p style="color:#94a3b8; font-size:14px;">응답이 없습니다.</p>';
+
+            textContainer.innerHTML += `
+                <div class="admin-section">
+                    <strong>${index+1}. ${qObj.text}</strong>
+                    <div style="margin-top:10px;">${answersHtml}</div>
+                </div>
+            `;
+        });
+    };
+
+    // 초기 실행
+    loadSurveyList();
+</script>
+</body>
+</html>
